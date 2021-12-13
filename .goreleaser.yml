@@ -33,4 +33,4 @@ changelog:
       - '^test:'
 dockers:
   - image_templates:
-    - damomurf/ts-dns
+    - ghcr.io/damomurf/ts-dns
