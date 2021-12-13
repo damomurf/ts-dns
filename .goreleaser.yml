@@ -33,4 +33,5 @@ changelog:
       - '^test:'
 dockers:
   - image_templates:
-    - ghcr.io/damomurf/ts-dns
+    - ghcr.io/damomurf/ts-dns:{{ .Tag }} 
+    - ghcr.io/damomurf/ts-dns:latest
