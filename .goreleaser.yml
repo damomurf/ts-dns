@@ -31,3 +31,6 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
+dockers:
+  - image_templates:
+    - damomurf/ts-dns
