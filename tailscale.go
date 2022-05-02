@@ -23,6 +23,7 @@ type Device struct {
 	OS                        string
 	UpdateAvailable           bool
 	User                      string
+	Tags                      []string
 	// This can be empty in responses and causes issues for JSON parsing:
 	//Created                   *time.Time `json:"created,omitEmpty"`
 }

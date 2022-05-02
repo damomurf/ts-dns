@@ -16,8 +16,9 @@ import (
 )
 
 type deviceEntry struct {
-	A    net.IP
-	AAAA net.IP
+	A     net.IP
+	AAAA  net.IP
+	CNAME string
 }
 
 var tsDevices map[string]deviceEntry
@@ -63,6 +64,17 @@ func fetchDevices(tailnet, key string) error {
 			A:    net.ParseIP(device.Addresses[0]),
 			AAAA: net.ParseIP(device.Addresses[1]),
 		}
+		if len(device.Tags) > 0 {
+			for _, t := range device.Tags {
+				fmt.Printf("Tag: %s\n", t)
+				if strings.HasPrefix(t, "tag:"+*tagPrefix) {
+					fmt.Printf("Adding Cname entry for %s\n", strings.TrimPrefix(t, "tag:"+*tagPrefix))
+					tsDevices[strings.TrimPrefix(t, "tag:"+*tagPrefix)] = deviceEntry{
+						CNAME: name,
+					}
+				}
+			}
+		}
 	}
 
 	log.Printf("%+v", tsDevices)
@@ -89,18 +101,54 @@ func handleLookup(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	rrTTL := uint32((*ttl).Seconds())
+
 	switch r.Question[0].Qtype {
 	case dns.TypeA:
+		if tsDevices[host].CNAME != "" {
+			// This is  CNAME, so return that record and the corresponding A
+			rr := &dns.CNAME{
+				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rrTTL},
+				Target: tsDevices[host].CNAME + "." + *domain + ".",
+			}
+			m.Answer = append(m.Answer, rr)
+			rrA := &dns.A{
+				Hdr: dns.RR_Header{Name: tsDevices[host].CNAME + "." + *domain + ".", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rrTTL},
+				A:   tsDevices[tsDevices[host].CNAME].A.To4(),
+			}
+			m.Answer = append(m.Answer, rrA)
+			break
+		}
 		rr := &dns.A{
-			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
+			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rrTTL},
 			A:   tsDevices[host].A.To4(),
 		}
 		m.Answer = append(m.Answer, rr)
 	//m.Extra = append(m.Extra, t)
 	case dns.TypeAAAA:
+		if tsDevices[host].CNAME != "" {
+			// This is  CNAME, so return that record and the corresponding AAAA
+			rr := &dns.CNAME{
+				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rrTTL},
+				Target: tsDevices[host].CNAME + "." + *domain + ".",
+			}
+			m.Answer = append(m.Answer, rr)
+			rrA := &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: tsDevices[host].CNAME + "." + *domain + ".", Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rrTTL},
+				AAAA: tsDevices[tsDevices[host].CNAME].AAAA.To16(),
+			}
+			m.Answer = append(m.Answer, rrA)
+			break
+		}
 		rr := &dns.AAAA{
-			Hdr:  dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
+			Hdr:  dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rrTTL},
 			AAAA: tsDevices[host].AAAA.To16(),
+		}
+		m.Answer = append(m.Answer, rr)
+	case dns.TypeCNAME:
+		rr := &dns.CNAME{
+			Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rrTTL},
+			Target: tsDevices[host].CNAME + "." + *domain + ".",
 		}
 		m.Answer = append(m.Answer, rr)
 	}
@@ -110,10 +158,12 @@ func handleLookup(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 var (
-	tailnet  = flag.String("tailnet", "murf.org", "The Tailscale tailnet name.")
-	key      = flag.String("key", "", "Tailscale API Key")
-	domain   = flag.String("domain", "murf.dev", "The domain to provide responses for.")
-	interval = flag.Duration("interval", 5*time.Minute, "How often to poll the Tailscale API for hosts.")
+	tailnet   = flag.String("tailnet", "murf.org", "The Tailscale tailnet name.")
+	key       = flag.String("key", "", "Tailscale API Key")
+	domain    = flag.String("domain", "murf.dev", "The domain to provide responses for.")
+	interval  = flag.Duration("interval", 5*time.Minute, "How often to poll the Tailscale API for hosts.")
+	tagPrefix = flag.String("tag-prefix", "cname-", "The tag prefix to use to generate CName entries against the hostname.")
+	ttl       = flag.Duration("ttl", 60*time.Second, "The TTL to return on DNS entries.")
 )
 
 func main() {
@@ -125,8 +175,7 @@ func main() {
 		log.Fatalf("%+v", err)
 	}
 	go func() {
-		for {
-			time.Sleep(*interval)
+		for _ = range time.Tick(*interval) {
 			err := fetchDevices(*tailnet, *key)
 			if err != nil {
 				log.Printf("%+v", err)
